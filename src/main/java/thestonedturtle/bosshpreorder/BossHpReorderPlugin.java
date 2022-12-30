@@ -24,6 +24,7 @@
  */
 package thestonedturtle.bosshpreorder;
 
+import com.google.inject.Provides;
 import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
@@ -61,6 +62,15 @@ public class BossHpReorderPlugin extends Plugin
 
 	@Inject
 	private ConfigManager configManager;
+
+	@Inject
+	private BossHpReorderConfig config;
+
+	@Provides
+	BossHpReorderConfig provideConfig(ConfigManager configManager)
+	{
+		return configManager.getConfig(BossHpReorderConfig.class);
+	}
 
 	@Override
 	protected void startUp() throws Exception
@@ -101,6 +111,12 @@ public class BossHpReorderPlugin extends Plugin
 	@Subscribe
 	public void onConfigChanged(ConfigChanged e)
 	{
+		if (e.getGroup().equals(BossHpReorderConfig.GROUP_KEY))
+		{
+			clientThread.invoke(() -> adjustHealthBarLocation(configManager.getConfiguration(RUNELITE_GROUP_KEY, HP_BAR_NAME + POSITION_KEY)));
+			return;
+		}
+
 		if (!e.getGroup().equals(RUNELITE_GROUP_KEY))
 		{
 			return;
@@ -174,8 +190,8 @@ public class BossHpReorderPlugin extends Plugin
 		{
 			// Force the containers to the top of the screen
 			// y = 23 is the default position of the hpContainer
-			xpTrackerContainer.setForcedPosition(xpTrackerContainer.getRelativeX(), 23);
-			hpContainer.setForcedPosition(hpContainer.getRelativeX(), 23);
+			xpTrackerContainer.setForcedPosition(xpTrackerContainer.getRelativeX(), config.barOffset());
+			hpContainer.setForcedPosition(hpContainer.getRelativeX(), config.barOffset());
 
 			// If the boss HP bar is in the center of the screen move the XP drops down
 			// This will prevent the XP drops from displaying over the HP bar
