@@ -100,6 +100,12 @@ public class BossHpReorderPlugin extends Plugin
 			return;
 		}
 
+		// If the HP bar is set to a dynamic location do not make any changes
+		if (configManager.getConfiguration(RUNELITE_GROUP_KEY, HP_BAR_NAME + LOCATION_KEY) != null)
+		{
+			return;
+		}
+
 		if (e.getVarbitId() == XP_DROPS_SHOWN_VARBIT
 			|| e.getVarbitId() == Varbits.EXPERIENCE_TRACKER_POSITION
 			|| e.getVarbitId() == Varbits.BOSS_HEALTH_OVERLAY)
@@ -113,6 +119,12 @@ public class BossHpReorderPlugin extends Plugin
 	{
 		if (e.getGroup().equals(BossHpReorderConfig.GROUP_KEY))
 		{
+			// If the HP bar is set to a dynamic location do not make any changes
+			if (configManager.getConfiguration(RUNELITE_GROUP_KEY, HP_BAR_NAME + LOCATION_KEY) != null)
+			{
+				return;
+			}
+
 			clientThread.invoke(() -> adjustHealthBarLocation(configManager.getConfiguration(RUNELITE_GROUP_KEY, HP_BAR_NAME + POSITION_KEY)));
 			return;
 		}
@@ -142,6 +154,12 @@ public class BossHpReorderPlugin extends Plugin
 		// When the HP bar is loaded we may need to adjust the position
 		// The easiest way to check when the HP bar has been loaded is whenever the HP Bar Text has changed
 		if (e.getScriptId() != HP_BAR_TEXT_UPDATE_SCRIPT_ID)
+		{
+			return;
+		}
+
+		// If the HP bar is set to a dynamic location do not make any changes
+		if (configManager.getConfiguration(RUNELITE_GROUP_KEY, HP_BAR_NAME + LOCATION_KEY) != null)
 		{
 			return;
 		}
