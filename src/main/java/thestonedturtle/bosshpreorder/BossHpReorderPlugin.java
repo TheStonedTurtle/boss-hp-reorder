@@ -41,7 +41,7 @@ import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 
 @PluginDescriptor(
-	name = "Boss HP Reorder"
+	name = "Boss HP Bar Offset"
 )
 public class BossHpReorderPlugin extends Plugin
 {
