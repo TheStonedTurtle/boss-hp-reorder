@@ -28,12 +28,11 @@ import com.google.inject.Provides;
 import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
-import net.runelite.api.Varbits;
 import net.runelite.api.events.ScriptPostFired;
 import net.runelite.api.events.VarbitChanged;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
-import net.runelite.api.widgets.WidgetID;
-import net.runelite.api.widgets.WidgetInfo;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -51,7 +50,8 @@ public class BossHpReorderPlugin extends Plugin
 	private static final String LOCATION_KEY = "_preferredLocation";
 	private static final String HP_BAR_NAME = "HEALTH_OVERLAY_BAR";
 
-	private static final int XP_DROPS_SHOWN_VARBIT = 4702;
+    private static final int DEFAULT_Y_POSITION_OF_HP_CONTAINER = 23;
+
 	private static final int HP_BAR_TEXT_UPDATE_SCRIPT_ID = 2102;
 
 	@Inject
@@ -73,7 +73,7 @@ public class BossHpReorderPlugin extends Plugin
 	}
 
 	@Override
-	protected void startUp() throws Exception
+	protected void startUp()
 	{
 		final String position = configManager.getConfiguration(RUNELITE_GROUP_KEY, HP_BAR_NAME + POSITION_KEY);
 		final String location = configManager.getConfiguration(RUNELITE_GROUP_KEY, HP_BAR_NAME + LOCATION_KEY);
@@ -87,7 +87,7 @@ public class BossHpReorderPlugin extends Plugin
 	}
 
 	@Override
-	protected void shutDown() throws Exception
+	protected void shutDown()
 	{
 		resetWidgetPositions();
 	}
@@ -106,9 +106,9 @@ public class BossHpReorderPlugin extends Plugin
 			return;
 		}
 
-		if (e.getVarbitId() == XP_DROPS_SHOWN_VARBIT
-			|| e.getVarbitId() == Varbits.EXPERIENCE_TRACKER_POSITION
-			|| e.getVarbitId() == Varbits.BOSS_HEALTH_OVERLAY)
+		if (e.getVarbitId() == VarbitID.XPDROPS_ENABLED
+			|| e.getVarbitId() == VarbitID.XPDROPS_POSITION
+			|| e.getVarbitId() == VarbitID.HPBAR_HUD_BOSS_DISABLED)
 		{
 			clientThread.invoke(() -> adjustHealthBarLocation(configManager.getConfiguration(RUNELITE_GROUP_KEY, HP_BAR_NAME + POSITION_KEY)));
 		}
@@ -149,7 +149,7 @@ public class BossHpReorderPlugin extends Plugin
 	}
 
 	@Subscribe
-	private void onScriptPostFired(final ScriptPostFired e)
+	public void onScriptPostFired(final ScriptPostFired e)
 	{
 		// When the HP bar is loaded we may need to adjust the position
 		// The easiest way to check when the HP bar has been loaded is whenever the HP Bar Text has changed
@@ -169,73 +169,54 @@ public class BossHpReorderPlugin extends Plugin
 
 	private void adjustHealthBarLocation(final String newVal)
 	{
-		// If xp drops or the boss HP bar aren't being shown we don't need to do anything
-		if (client.getVarbitValue(XP_DROPS_SHOWN_VARBIT) == 0 || client.getVarbitValue(Varbits.BOSS_HEALTH_OVERLAY) == 1)
-		{
-			resetWidgetPositions();
-			return;
-		}
-
-		// If the XP drops aren't set to the middle then the HP bar will not be auto adjusted
-		final int xpLoc = client.getVarbitValue(Varbits.EXPERIENCE_TRACKER_POSITION);
-		if (xpLoc != 1)
+		// if the boss HP bar isn't disabled we don't need to do anything
+		if (client.getVarbitValue(VarbitID.HPBAR_HUD_BOSS_DISABLED) == 1)
 		{
 			resetWidgetPositions();
 			return;
 		}
 
 		// If the Boss Health Bar isn't available then we don't need to do anything
-		final Widget hpContainer = client.getWidget(WidgetID.HEALTH_OVERLAY_BAR_GROUP_ID, 4);
-		final Widget hpBar = client.getWidget(WidgetInfo.HEALTH_OVERLAY_BAR);
+        final Widget hpContainer = client.getWidget(InterfaceID.HpbarHud.HPDODGER);
+        final Widget hpBar = client.getWidget(InterfaceID.HpbarHud.HP);
 		if (hpContainer == null || hpBar == null)
 		{
 			resetWidgetPositions();
 			return;
 		}
 
-		final Widget xpTrackerContainer = client.getWidget(WidgetID.EXPERIENCE_DROP_GROUP_ID, 3);
-		final Widget xpTracker = client.getWidget(WidgetID.EXPERIENCE_DROP_GROUP_ID, 4);
-		if (xpTrackerContainer == null || xpTracker == null)
-		{
-			resetWidgetPositions();
-			return;
-		}
+        // The default position for the HP Bar is `TOP_CENTER` which will be saved as `null` in the config
+        // We only care about the top snapped positions as otherwise the adjustments aren't necessary to save space
+        final boolean hasHpBarSnappedToTheTop = newVal == null || newVal.equals("TOP_RIGHT") || newVal.equals("TOP_LEFT");
+        if (!hasHpBarSnappedToTheTop)
+        {
+            resetWidgetPositions();
+            return;
+        }
 
-		// As long as the location of the xp drops is set to middle (1) it will adjust this overlay regardless of it's snapped position
-		// The default position for the HP Bar is `TOP_CENTER` which will be saved as `null` in the config
-		// We only care about the top snapped positions as otherwise the adjustments don't really matter
-		if (newVal == null || newVal.equals("TOP_RIGHT") || newVal.equals("TOP_LEFT"))
-		{
-			// Force the containers to the top of the screen
-			// y = 23 is the default position of the hpContainer
-			xpTrackerContainer.setForcedPosition(xpTrackerContainer.getRelativeX(), config.barOffset());
-			hpContainer.setForcedPosition(hpContainer.getRelativeX(), config.barOffset());
+		// As long as the location of the xp drops (VarbitID.XPDROPS_POSITION) is set to middle (1) the hp bar will be shifted downwards (if snapped to any top position)
+        // Previously, this plugin only applied when this was set to the middle. Now though, it provides the offset
+        // functionality regardless of XPDROPS position so checking for the XPDROPS_POSITION is not necessary
 
-			// If the boss HP bar is in the center of the screen move the XP drops down
-			// This will prevent the XP drops from displaying over the HP bar
-			if (newVal == null)
-			{
-				xpTracker.setForcedPosition(xpTracker.getRelativeX(), hpBar.getHeight());
-			}
-			else
-			{
-				xpTracker.setForcedPosition(-1, -1);
-			}
-		}
-		else
-		{
-			// For any other scenario the default behavior is fine
-			resetWidgetPositions();
-		}
+        // Force the HP container to the top of the screen
+        hpContainer.setForcedPosition(hpContainer.getRelativeX(), config.barOffset());
+
+        // If they're showing XP drops and the hpBar is anchored to the middle of the screen then we need to push the xp drops downward
+        // If we do not do this then the XP drops from displaying over the HP bar, which is weirdly vanilla behavior
+        final Widget xpTracker = client.getWidget(InterfaceID.XpDrops.CONTAINER);
+        if (xpTracker != null && newVal == null)
+        {
+            final int customOffset = DEFAULT_Y_POSITION_OF_HP_CONTAINER - config.barOffset();
+            xpTracker.setForcedPosition(xpTracker.getRelativeX(), hpBar.getHeight() - customOffset);
+        }
 	}
+
 
 	private void resetWidgetPositions()
 	{
-		final Widget xpTrackerContainer = client.getWidget(WidgetID.EXPERIENCE_DROP_GROUP_ID, 3);
-		final Widget xpTracker = client.getWidget(WidgetID.EXPERIENCE_DROP_GROUP_ID, 4);
-		final Widget hpContainer = client.getWidget(WidgetID.HEALTH_OVERLAY_BAR_GROUP_ID, 4);
+        final Widget xpTracker = client.getWidget(InterfaceID.XpDrops.CONTAINER);
+        final Widget hpContainer = client.getWidget(InterfaceID.HpbarHud.HPDODGER);
 
-		resetWidgetForcedPosition(xpTrackerContainer);
 		resetWidgetForcedPosition(xpTracker);
 		resetWidgetForcedPosition(hpContainer);
 	}
