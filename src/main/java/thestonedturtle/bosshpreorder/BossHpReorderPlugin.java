@@ -26,8 +26,10 @@ package thestonedturtle.bosshpreorder;
 
 import com.google.inject.Provides;
 import javax.inject.Inject;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.ScriptID;
 import net.runelite.api.events.ScriptPostFired;
 import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InterfaceID;
@@ -39,20 +41,27 @@ import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import static thestonedturtle.bosshpreorder.BossHpReorderConfig.TOB_BAR_OFFSET_KEY;
+import static thestonedturtle.bosshpreorder.BossHpReorderConfig.TOB_KEY;
 
 @PluginDescriptor(
 	name = "Boss HP Bar Offset"
 )
+@Slf4j
 public class BossHpReorderPlugin extends Plugin
 {
 	private static final String RUNELITE_GROUP_KEY = "runelite";
 	private static final String POSITION_KEY = "_preferredPosition";
 	private static final String LOCATION_KEY = "_preferredLocation";
 	private static final String HP_BAR_NAME = "HEALTH_OVERLAY_BAR";
+    private static final String TOB_HP_BAR_NAME = "TOB_HEALTH_BAR";
 
     private static final int DEFAULT_Y_POSITION_OF_HP_CONTAINER = 23;
+    private static final int TOB_XP_TRACKER_DEFAULT_OFFSET = 6;
+    private static final int TOB_XP_TRACKER_CONFIG_OFFSET = 1;
 
 	private static final int HP_BAR_TEXT_UPDATE_SCRIPT_ID = 2102;
+    private static final int TOB_PROGRESS_BAR_UPDATE_SCRIPT_ID = 2304;
 
 	@Inject
 	private Client client;
@@ -66,6 +75,8 @@ public class BossHpReorderPlugin extends Plugin
 	@Inject
 	private BossHpReorderConfig config;
 
+    private boolean inTob = false;
+
 	@Provides
 	BossHpReorderConfig provideConfig(ConfigManager configManager)
 	{
@@ -75,20 +86,33 @@ public class BossHpReorderPlugin extends Plugin
 	@Override
 	protected void startUp()
 	{
-		final String position = configManager.getConfiguration(RUNELITE_GROUP_KEY, HP_BAR_NAME + POSITION_KEY);
-		final String location = configManager.getConfiguration(RUNELITE_GROUP_KEY, HP_BAR_NAME + LOCATION_KEY);
+        if (client.getGameState() != GameState.LOGGED_IN)
+        {
+            return;
+        }
 
-		if (location != null)
-		{
-			return;
-		}
+        final String reg_position = configManager.getConfiguration(RUNELITE_GROUP_KEY, HP_BAR_NAME + POSITION_KEY);
+        final String reg_location = configManager.getConfiguration(RUNELITE_GROUP_KEY, HP_BAR_NAME + LOCATION_KEY);
+        if (reg_location == null)
+        {
+            clientThread.invoke(() -> adjustHealthBarLocation(reg_position));
+        }
 
-		clientThread.invoke(() -> adjustHealthBarLocation(position));
+        final String tob_position = configManager.getConfiguration(RUNELITE_GROUP_KEY, TOB_HP_BAR_NAME + POSITION_KEY);
+        final String tob_location = configManager.getConfiguration(RUNELITE_GROUP_KEY, TOB_HP_BAR_NAME + LOCATION_KEY);
+        if (tob_location == null)
+        {
+            clientThread.invoke(() -> {
+                inTob = calcIsInTob();
+                adjustTobProgressBarLocation(tob_position);
+            });
+        }
 	}
 
 	@Override
 	protected void shutDown()
 	{
+        inTob = false;
 		resetWidgetPositions();
 	}
 
@@ -99,6 +123,12 @@ public class BossHpReorderPlugin extends Plugin
 		{
 			return;
 		}
+
+        if (e.getVarbitId() == VarbitID.TOB_CLIENT_PARTYSTATUS)
+        {
+            inTob = calcIsInTob();
+            return;
+        }
 
 		// If the HP bar is set to a dynamic location do not make any changes
 		if (configManager.getConfiguration(RUNELITE_GROUP_KEY, HP_BAR_NAME + LOCATION_KEY) != null)
@@ -119,6 +149,27 @@ public class BossHpReorderPlugin extends Plugin
 	{
 		if (e.getGroup().equals(BossHpReorderConfig.GROUP_KEY))
 		{
+            if (e.getKey().equals(TOB_KEY) || e.getKey().equals(TOB_BAR_OFFSET_KEY))
+            {
+                // If the TOB progress bar is set to a dynamic location do not make any changes
+                if (configManager.getConfiguration(RUNELITE_GROUP_KEY, TOB_HP_BAR_NAME + LOCATION_KEY) != null)
+                {
+                    return;
+                }
+
+                if (!config.applyToTob()) {
+                    clientThread.invoke(this::resetWidgetPositions);
+                    return;
+                }
+
+                if (inTob)
+                {
+                    clientThread.invoke(() -> adjustTobProgressBarLocation(configManager.getConfiguration(RUNELITE_GROUP_KEY, TOB_HP_BAR_NAME + POSITION_KEY)));
+                }
+
+                return;
+            }
+
 			// If the HP bar is set to a dynamic location do not make any changes
 			if (configManager.getConfiguration(RUNELITE_GROUP_KEY, HP_BAR_NAME + LOCATION_KEY) != null)
 			{
@@ -138,12 +189,16 @@ public class BossHpReorderPlugin extends Plugin
 		{
 			clientThread.invoke(() -> adjustHealthBarLocation(e.getNewValue()));
 		}
-		else if (e.getKey().equals(HP_BAR_NAME + LOCATION_KEY))
+        else if (e.getKey().equals(TOB_HP_BAR_NAME + POSITION_KEY))
+        {
+            clientThread.invoke(() -> adjustTobProgressBarLocation(e.getNewValue()));
+        }
+		else if (e.getKey().equals(HP_BAR_NAME + LOCATION_KEY) || e.getKey().equals(TOB_HP_BAR_NAME + LOCATION_KEY))
 		{
 			// If the widget was changed to a dynamic location we want to reset everything's forced position
 			if (e.getNewValue() != null)
 			{
-				resetWidgetPositions();
+				clientThread.invoke(this::resetWidgetPositions);
 			}
 		}
 	}
@@ -151,6 +206,20 @@ public class BossHpReorderPlugin extends Plugin
 	@Subscribe
 	public void onScriptPostFired(final ScriptPostFired e)
 	{
+        if (e.getScriptId() == TOB_PROGRESS_BAR_UPDATE_SCRIPT_ID && config.applyToTob())
+        {
+            clientThread.invoke(() -> adjustTobProgressBarLocation(configManager.getConfiguration(RUNELITE_GROUP_KEY, TOB_HP_BAR_NAME + POSITION_KEY)));
+            return;
+        }
+
+        // HP_HUD_UPDATE gets triggered all over the place, and pretty often. But it's the only way I could figure out
+        // To trigger the offsetting on the bar when it is first displayed at maiden
+        if (e.getScriptId() == ScriptID.HP_HUD_UPDATE && inTob)
+        {
+            clientThread.invoke(() -> adjustTobProgressBarLocation(configManager.getConfiguration(RUNELITE_GROUP_KEY, TOB_HP_BAR_NAME + POSITION_KEY)));
+            return;
+        }
+
 		// When the HP bar is loaded we may need to adjust the position
 		// The easiest way to check when the HP bar has been loaded is whenever the HP Bar Text has changed
 		if (e.getScriptId() != HP_BAR_TEXT_UPDATE_SCRIPT_ID)
@@ -214,11 +283,16 @@ public class BossHpReorderPlugin extends Plugin
 
 	private void resetWidgetPositions()
 	{
+        final Widget xpTrackerDodger = client.getWidget(InterfaceID.XpDrops.CONTAINERDODGER);
         final Widget xpTracker = client.getWidget(InterfaceID.XpDrops.CONTAINER);
         final Widget hpContainer = client.getWidget(InterfaceID.HpbarHud.HPDODGER);
 
+        resetWidgetForcedPosition(xpTrackerDodger);
 		resetWidgetForcedPosition(xpTracker);
 		resetWidgetForcedPosition(hpContainer);
+
+        final Widget tobMiddleDodger = client.getWidget(InterfaceID.TobHud.MIDDLE_DODGER);
+        resetWidgetForcedPosition(tobMiddleDodger);
 	}
 
 	private void resetWidgetForcedPosition(final Widget w)
@@ -229,4 +303,35 @@ public class BossHpReorderPlugin extends Plugin
 		}
 		w.setForcedPosition(-1, -1);
 	}
+
+    private boolean calcIsInTob()
+    {
+        return client.getVarbitValue(VarbitID.TOB_CLIENT_PARTYSTATUS) == 2 || client.getVarbitValue(VarbitID.TOB_CLIENT_PARTYSTATUS) == 3;
+    }
+
+    private void adjustTobProgressBarLocation(String tobProgressBarPosition)
+    {
+        if (!inTob)
+        {
+            return;
+        }
+
+        final Widget tobMiddleDodger = client.getWidget(InterfaceID.TobHud.MIDDLE_DODGER);
+        if (tobMiddleDodger == null)
+        {
+            return;
+        }
+        tobMiddleDodger.setForcedPosition(tobMiddleDodger.getRelativeX(), config.tobBarOffset());
+
+        final boolean isDockerTopOrTopRight = tobProgressBarPosition == null || tobProgressBarPosition.equals("TOP_RIGHT");
+        final Widget xpTrackerDodger = client.getWidget(InterfaceID.XpDrops.CONTAINERDODGER);
+        final Widget xpTracker = client.getWidget(InterfaceID.XpDrops.CONTAINER);
+        final Widget progressContainer = client.getWidget(InterfaceID.TobHud.PROGRESS_CONTAINER);
+        if (isDockerTopOrTopRight && xpTrackerDodger != null && xpTracker != null && progressContainer != null)
+        {
+            int defaultHeight = progressContainer.getHeight() + TOB_XP_TRACKER_DEFAULT_OFFSET;
+            xpTrackerDodger.setForcedPosition(xpTrackerDodger.getRelativeX(),  defaultHeight + (config.tobBarOffset() - TOB_XP_TRACKER_CONFIG_OFFSET));
+            xpTracker.setForcedPosition(xpTracker.getRelativeX(), 0);
+        }
+    }
 }
